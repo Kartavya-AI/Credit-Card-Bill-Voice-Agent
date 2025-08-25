@@ -9,9 +9,8 @@ from livekit import rtc, api
 from livekit.agents import (Agent, AgentSession, JobContext, RoomInputOptions, RunContext, WorkerOptions, cli, get_job_context, function_tool)
 from livekit.plugins import cartesia, deepgram, google, noise_cancellation, silero
 
-
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("jack-agent")
+logger = logging.getLogger("emily-agent")
 
 load_dotenv(".env.local")
 
@@ -32,147 +31,190 @@ async def hangup_call():
 # Dataclass for State Management
 @dataclass
 class CallState:
-    guest_name: str | None = None
+    customer_name: str | None = None
     is_interested: bool = False
-    travel_dates: str | None = None
-    party_size: str | None = None
-    room_preferences: str | None = None
+    payment_amount: str | None = None
+    payment_method: str | None = None
+    last_four_digits: str | None = None
+    due_date: str | None = None
     objections: list[str] = field(default_factory=list)
+    has_overdue_balance: bool = False
 
 class GreetingAgent(Agent):
     def __init__(self):
         super().__init__(
-            instructions="""You are Jack, a hospitality specialist with The Overlook Hotel.
-            Your current task is to start the cold call.
-            1. Greet the user enthusiastically.
+            instructions="""You are Emily, a payment specialist with SecureCard Financial Services.
+            Your current task is to start the call about credit card bill payment.
+            1. Greet the customer professionally and warmly.
             2. Confirm their name if you have it.
-            3. Check if it's a good time to chat for a moment.
-            4. Deliver your concise, engaging value proposition: "I help travelers like you discover unforgettable experiences at The Overlook Hotel, where luxury meets breathtaking mountain views."
-            5. Your goal is to get a neutral or positive response to proceed to the next step.
-            Speak at a brisk but natural pace (~140-150 words per minute).
-            Example: "Hi, this is Jack with The Overlook Hotel. Is this [Contact_Name]? Got a quick moment to chat about an amazing getaway opportunity?"
+            3. Check if it's a good time to discuss their credit card account.
+            4. Deliver your value proposition: "I'm calling to help you with convenient payment options for your credit card bill and ensure you never miss a payment."
+            5. Your goal is to get a neutral or positive response to proceed to payment discussion.
+            Speak at a professional but friendly pace.
+            Example: "Hi, this is Emily with SecureCard Financial Services. Is this [Customer_Name]? I'm calling about your credit card account - do you have a moment to discuss some convenient payment options?"
             """
         )
     
     async def on_enter(self) -> None:
-        await self.session.generate_reply(instructions="Greet the user, introduce yourself, and deliver your soft pitch.")
+        await self.session.generate_reply(instructions="Greet the customer, introduce yourself, and explain the purpose of your call.")
 
     @function_tool()
     async def detected_answering_machine(self, context: RunContext[CallState]):
         logger.info("Answering machine detected. Leaving a message and hanging up.")
         await context.session.generate_reply(
-            instructions="""Leave a brief, friendly message: "Hi, this is Jack from The Overlook Hotel. I was calling about our special offers and premium accommodations. I'll try again another time. Thanks!" After saying this, you will hang up."""
+            instructions="""Leave a brief, professional message: "Hi, this is Emily from SecureCard Financial Services calling about your credit card payment options. Please call us back at your convenience to discuss easy payment solutions. Thank you!" After saying this, you will hang up."""
         )
         if context.session.current_speech:
             await context.session.current_speech.wait_for_playout()
         await hangup_call()
 
     @function_tool()
-    async def proceed_to_qualification(self, context: RunContext[CallState]):
-        logger.info("Handoff from Greeting to Qualification")
-        return "Great!", QualificationAgent(chat_ctx=self.session._chat_ctx)
+    async def proceed_to_payment_inquiry(self, context: RunContext[CallState]):
+        logger.info("Handoff from Greeting to Payment Inquiry")
+        return "Great! Let me help you with that.", PaymentInquiryAgent(chat_ctx=self.session._chat_ctx)
 
     @function_tool()
     async def end_call(self, context: RunContext[CallState]):
-        logger.info("User requested to end call. Handing off to GoodbyeAgent.")
+        logger.info("Customer requested to end call. Handing off to GoodbyeAgent.")
         return "Of course. Thanks for your time.", GoodbyeAgent(chat_ctx=self.session._chat_ctx)
 
 
-class QualificationAgent(Agent):
+class PaymentInquiryAgent(Agent):
     def __init__(self, chat_ctx):
         super().__init__(
-            instructions="""You are Jack, a hospitality specialist. Your current task is to qualify the lead.
-            Ask 1-2 critical, open-ended questions to uncover potential interest in booking a stay.
-            - "Are you planning any getaways or special occasions in the next few months?"
-            - "What kind of experiences are you looking for in your ideal vacation - relaxation, adventure, or something special?"
-            - "On a scale of 1-10, how motivated are you to book a memorable hotel experience right now?"
-            Listen carefully to their response to determine if they are interested, have an objection, or are not interested at all.""",
+            instructions="""You are Emily, a payment specialist. Your current task is to inquire about their payment needs.
+            Ask key questions to understand their payment situation:
+            - "Are you looking to make a payment on your current balance today?"
+            - "Do you have your credit card statement or know your current balance?"
+            - "When is your payment due date?"
+            - "Are you interested in setting up automatic payments to avoid late fees?"
+            Listen carefully to their response to determine if they want to make a payment, have questions about their balance, or need payment assistance.""",
             chat_ctx=chat_ctx,
         )
 
     @function_tool()
-    async def prospect_is_interested(self, context: RunContext[CallState], travel_dates: str, party_size: str, room_preferences: str = ""):
-        logger.info(f"Guest is interested. Dates: {travel_dates}, Party size: {party_size}, Preferences: {room_preferences}")
+    async def customer_wants_to_pay(self, context: RunContext[CallState], payment_amount: str, due_date: str = "", last_four_digits: str = ""):
+        logger.info(f"Customer wants to make payment. Amount: {payment_amount}, Due: {due_date}")
         context.userdata.is_interested = True
-        context.userdata.travel_dates = travel_dates
-        context.userdata.party_size = party_size
-        context.userdata.room_preferences = room_preferences
-        return "That sounds wonderful!", ClosingAgent(chat_ctx=self.session._chat_ctx)
+        context.userdata.payment_amount = payment_amount
+        context.userdata.due_date = due_date
+        context.userdata.last_four_digits = last_four_digits
+        return "Perfect! Let me help you process that payment.", PaymentProcessingAgent(chat_ctx=self.session._chat_ctx)
 
     @function_tool()
-    async def prospect_has_objection(self, context: RunContext[CallState], objection: str):
-        logger.info(f"Guest has an objection: {objection}")
+    async def customer_has_question(self, context: RunContext[CallState], question_type: str):
+        logger.info(f"Customer has a question: {question_type}")
+        return "I'd be happy to help with that.", QuestionHandlerAgent(chat_ctx=self.session._chat_ctx)
+
+    @function_tool()
+    async def customer_not_interested(self, context: RunContext[CallState]):
+        logger.info("Customer is not interested in payment services.")
+        return "I understand. Thank you for your time.", GoodbyeAgent(chat_ctx=self.session._chat_ctx)
+    
+    @function_tool()
+    async def customer_has_objection(self, context: RunContext[CallState], objection: str):
+        logger.info(f"Customer has an objection: {objection}")
         context.userdata.objections.append(objection)
-        return "I understand.", ObjectionHandlerAgent(chat_ctx=self.session._chat_ctx)
-
-    @function_tool()
-    async def prospect_not_interested(self, context: RunContext[CallState]):
-        logger.info("Guest is not interested.")
-        return "I appreciate your time.", GoodbyeAgent(chat_ctx=self.session._chat_ctx)
+        return "I understand your concern.", ObjectionHandlerAgent(chat_ctx=self.session._chat_ctx)
     
     @function_tool()
     async def end_call(self, context: RunContext[CallState]):
-        logger.info("User requested to end call. Handing off to GoodbyeAgent.")
-        return "No problem. I appreciate your time.", GoodbyeAgent(chat_ctx=self.session._chat_ctx)
+        logger.info("Customer requested to end call. Handing off to GoodbyeAgent.")
+        return "No problem. Thank you for your time.", GoodbyeAgent(chat_ctx=self.session._chat_ctx)
+
+
+class QuestionHandlerAgent(Agent):
+    def __init__(self, chat_ctx):
+        super().__init__(
+            instructions="""You are Emily, a payment specialist. Your task is to answer customer questions about their credit card account.
+            Common questions and responses:
+            - Balance inquiry: "I can help you check your current balance. Can you verify the last four digits of your card?"
+            - Payment methods: "We accept bank transfers, debit cards, and online payments. Which would be most convenient for you?"
+            - Due dates: "Let me help you understand your payment schedule and how to avoid late fees."
+            - Auto-pay setup: "Automatic payments ensure you never miss a due date. Would you like me to explain how that works?"
+            After answering their question, guide them back to making a payment or setting up payment services.""",
+            chat_ctx=chat_ctx,
+        )
+    
+    @function_tool()
+    async def question_answered_proceed_to_payment(self, context: RunContext[CallState]):
+        logger.info("Question answered, proceeding to payment processing.")
+        return "Does that help? Now, would you like to make a payment today?", PaymentInquiryAgent(chat_ctx=self.session._chat_ctx)
+    
+    @function_tool()
+    async def end_call(self, context: RunContext[CallState]):
+        logger.info("Customer requested to end call. Handing off to GoodbyeAgent.")
+        return "I hope that helped. Thank you for calling.", GoodbyeAgent(chat_ctx=self.session._chat_ctx)
 
 
 class ObjectionHandlerAgent(Agent):
     def __init__(self, chat_ctx):
         super().__init__(
-            instructions="""You are Jack, a hospitality specialist. Your current task is to handle objections.
-            Respond empathetically to the user's concerns. Ask follow-up questions to understand their specific worries.
-            - If "Too expensive": "I understand budget is important. What price range works for you? We have various packages and seasonal rates that might fit perfectly."
-            - If "Not the right time": "That makes sense. When would be a better time for a getaway? I can share information about our upcoming specials."
-            - If "Already have plans": "That's wonderful! Are you looking for something for later in the year, or perhaps a backup option?"
-            Your goal is to resolve the objection and steer the conversation back towards qualification.""",
+            instructions="""You are Emily, a payment specialist. Your task is to handle payment-related objections.
+            Respond empathetically to customer concerns:
+            - If "Don't have money right now": "I understand. Would you like to discuss payment plan options or a minimum payment to avoid late fees?"
+            - If "Not sure about balance": "No problem. I can help you verify your current balance and payment options."
+            - If "Prefer to pay online": "That's perfectly fine. Would you like me to walk you through our secure online payment portal?"
+            - If "Already made payment": "Let me help verify that payment was processed correctly."
+            Your goal is to resolve concerns and guide them toward a payment solution.""",
             chat_ctx=chat_ctx,
         )
     
     @function_tool()
     async def objection_resolved(self, context: RunContext[CallState]):
-        logger.info("Objection resolved, returning to qualification.")
-        return "Does that make sense?", QualificationAgent(chat_ctx=self.session._chat_ctx)
+        logger.info("Objection resolved, returning to payment inquiry.")
+        return "I'm glad we could work that out.", PaymentInquiryAgent(chat_ctx=self.session._chat_ctx)
     
     @function_tool()
     async def end_call(self, context: RunContext[CallState]):
-        logger.info("User requested to end call. Handing off to Goodbye Agent.")
-        return "I understand. Thank you for your time.", GoodbyeAgent(chat_ctx=self.session._chat_ctx)
+        logger.info("Customer requested to end call. Handing off to GoodbyeAgent.")
+        return "I understand. Please don't hesitate to call if you need assistance.", GoodbyeAgent(chat_ctx=self.session._chat_ctx)
 
 
-class ClosingAgent(Agent):
+class PaymentProcessingAgent(Agent):
     def __init__(self, chat_ctx):
         super().__init__(
-            instructions="""You are Jack, a hospitality specialist. Your current task is to close for a booking consultation.
-            The guest has shown interest. Your goal is to schedule a 15-minute consultation to discuss their perfect stay.
-            Use an assumptive close.
-            Example: "Based on what you've shared, I'd love to show you our available rooms and packages for those dates. Are you free for a quick 15-minute call Tuesday at 2 PM to go over everything?"
-            If they are hesitant, offer flexibility and emphasize the no-obligation nature.""",
+            instructions="""You are Emily, a payment specialist. Your task is to guide the customer through payment processing.
+            For security, you'll need to:
+            1. Verify their identity (last 4 digits of card, billing ZIP code)
+            2. Confirm payment amount and method
+            3. Process the payment securely
+            4. Provide confirmation details
+            Example: "To process your payment securely, I'll need to verify the last four digits of your credit card and your billing ZIP code."
+            Always emphasize security and give them confirmation numbers.""",
             chat_ctx=chat_ctx,
         )
     
     @function_tool()
-    async def consultation_scheduled(self, context: RunContext[CallState], date: str, time: str):
-        logger.info(f"Consultation scheduled for {date} at {time}.")
-        return f"Perfect, I've booked that consultation for us...", GoodbyeAgent(chat_ctx=self.session._chat_ctx)
+    async def payment_completed(self, context: RunContext[CallState], confirmation_number: str):
+        logger.info(f"Payment completed with confirmation: {confirmation_number}")
+        return f"Your payment has been processed successfully. Your confirmation number is {confirmation_number}.", GoodbyeAgent(chat_ctx=self.session._chat_ctx)
+    
+    @function_tool()
+    async def payment_failed(self, context: RunContext[CallState], reason: str):
+        logger.info(f"Payment failed: {reason}")
+        return f"I apologize, but we're having trouble processing your payment. Let me help you with an alternative method.", ObjectionHandlerAgent(chat_ctx=self.session._chat_ctx)
     
     @function_tool()
     async def end_call(self, context: RunContext[CallState]):
-        logger.info("User requested to end call. Handing off to GoodbyeAgent.")
-        return "I understand. Let's talk another time.", GoodbyeAgent(chat_ctx=self.session._chat_ctx)
+        logger.info("Customer requested to end call. Handing off to GoodbyeAgent.")
+        return "No problem. You can always call back to complete your payment.", GoodbyeAgent(chat_ctx=self.session._chat_ctx)
 
 
 class GoodbyeAgent(Agent):
     def __init__(self, chat_ctx):
         super().__init__(
-            instructions="""Your task is to end the call politely and professionally.
-            If a consultation was booked, confirm it. If not, thank them for their time and leave the door open for future contact.
-            Example (no interest): "No problem at all. Thanks for your time, [Contact Name]. I'll check in later, and feel free to reach out if you start planning any getaways!""",
+            instructions="""Your task is to end the call professionally and helpfully.
+            If a payment was completed, confirm it and remind them of their confirmation number.
+            If no payment was made, thank them and remind them of payment options and due dates.
+            Example (payment made): "Thank you for your payment today. Please keep your confirmation number for your records. Have a great day!"
+            Example (no payment): "Thank you for your time. Remember, you can make payments online 24/7 or call us back anytime. Have a great day!"""",
             chat_ctx=chat_ctx,
         )
 
     async def on_enter(self) -> None:
         await self.session.generate_reply(
-            instructions="Say goodbye to the user based on the outcome of the call."
+            instructions="Say goodbye to the customer based on the outcome of the call."
         )
        
         if self.session.current_speech:
@@ -193,7 +235,7 @@ async def entrypoint(ctx: JobContext):
         return
 
     participant_identity = phone_number
-    logger.info(f"starting outbound call agent for room: {ctx.room.name}, dialing: {phone_number}")
+    logger.info(f"starting outbound payment call agent for room: {ctx.room.name}, dialing: {phone_number}")
     await ctx.connect()
 
     logger.info("Loading VAD model...")
@@ -240,7 +282,7 @@ async def entrypoint(ctx: JobContext):
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(
         entrypoint_fnc=entrypoint,
-        agent_name="jack-outbound-caller",
+        agent_name="emily-payment-specialist",
         num_idle_processes=1,
         load_threshold=float('inf'),
     ))

@@ -5,7 +5,7 @@ import time
 from dotenv import load_dotenv
 from livekit import api
 
-AGENT_NAME = "jack-outbound-caller"
+AGENT_NAME = "emily-payment-specialist"
 PHONE_NUMBER_TO_CALL = "+919787264648"
 
 async def test_sip_configuration():
@@ -44,16 +44,18 @@ async def test_sip_configuration():
 async def make_call():
     try:
         lkapi, trunk_id = await test_sip_configuration()
-        room_name = f"hotel-outbound-call-{int(time.time())}"
-        print(f"\nCreating Call")
+        room_name = f"payment-outbound-call-{int(time.time())}"
+        print(f"\nCreating Credit Card Payment Call")
         print(f"Room name: {room_name}")
         print(f"Phone number: {PHONE_NUMBER_TO_CALL}")
         
         metadata = json.dumps({
-            "phone_number": PHONE_NUMBER_TO_CALL
+            "phone_number": PHONE_NUMBER_TO_CALL,
+            "call_type": "credit_card_payment",
+            "company": "SecureCard Financial Services"
         })
         
-        print("Creating agent dispatch...")
+        print("Creating payment agent dispatch...")
         dispatch = await lkapi.agent_dispatch.create_dispatch(
             api.CreateAgentDispatchRequest(
                 agent_name=AGENT_NAME,
@@ -64,6 +66,7 @@ async def make_call():
         print(f"Dispatch created successfully!")
         print(f"Dispatch ID: {dispatch.id}")
         print(f"Room: {dispatch.room}")
+        print(f"Agent: Emily - Credit Card Payment Specialist")
         
     except api.TwirpError as e:
         print(f"\nLiveKit API Error:")
