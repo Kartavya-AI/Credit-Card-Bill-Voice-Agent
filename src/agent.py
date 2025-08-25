@@ -208,7 +208,7 @@ class GoodbyeAgent(Agent):
             If a payment was completed, confirm it and remind them of their confirmation number.
             If no payment was made, thank them and remind them of payment options and due dates.
             Example (payment made): "Thank you for your payment today. Please keep your confirmation number for your records. Have a great day!"
-            Example (no payment): "Thank you for your time. Remember, you can make payments online 24/7 or call us back anytime. Have a great day!"""",
+            Example (no payment): "Thank you for your time. Remember, you can make payments online 24/7 or call us back anytime. Have a great day!""",
             chat_ctx=chat_ctx,
         )
 
